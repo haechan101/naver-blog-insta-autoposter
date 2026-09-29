@@ -149,9 +149,25 @@ def mark(company: str, draft: str = "", scheduled_at: str = "",
     _save(data)
 
 
+#: '다 쓴 것'으로 볼 상태. draft_only 는 초안만 있고 블로그에는 안 올라간 것입니다.
+DONE_STATUS = {"published", "scheduled", "manual"}
+
+
 def done_topics(company: str) -> list[str]:
-    """이 기업으로 이미 쓴 주제 목록."""
-    return list((_load().get(company) or {}).keys())
+    """이 기업으로 **실제로 발행한** 주제 목록.
+
+    ⚠ 예전에는 기록이 있기만 하면 썼다고 쳤습니다. 그래서 발행에 실패해
+      draft_only 로 남은 글이 완료로 잡혀 **다시 시도되지 않았습니다**
+      (2026-09-11 실측: 세션이 끊겨 못 올린 2편이 영영 대기열에서 빠짐).
+    """
+    rec = _load().get(company) or {}
+    return [k for k, v in rec.items()
+            if (v or {}).get("status") in DONE_STATUS]
+
+
+def records(company: str) -> dict:
+    """이 기업의 주제별 기록 원본 {주제: {draft, status, account, scheduled_at}}."""
+    return dict(_load().get(company) or {})
 
 
 def company_info(company: str) -> dict:

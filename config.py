@@ -40,6 +40,16 @@ def _load_dotenv(path: Path) -> None:
 _load_dotenv(BASE_DIR / ".env")
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 
+# ── 인스타그램 (톰슨에듀AI 계정) ─────────────────────
+INSTAGRAM_ACCESS_TOKEN = os.environ.get("INSTAGRAM_ACCESS_TOKEN", "")
+INSTAGRAM_USERNAME     = os.environ.get("INSTAGRAM_USERNAME", "")
+INSTA_DIR       = BLOG_DIR / "auto_insta"
+INSTA_ASSET_DIR = INSTA_DIR / "insta_images"     # 기업별 로고·건물 사진 (사람이 넣음)
+INSTA_BRAND_DIR = INSTA_ASSET_DIR / "_톰슨에듀AI"  # 톰슨에듀AI 로고·기능 캡처
+INSTA_OUT_DIR   = INSTA_DIR / "insta_out"        # 만든 카드 이미지
+# 반자동 발행 시각. [확인 완료]한 카드가 이 시각들에 하나씩 배정되고, 작업 스케줄러가 이 시각마다 올립니다.
+INSTA_POST_TIMES = ["08:30", "19:00"]
+
 # ── 모델 ─────────────────────────────────────────────
 # 품질 우선: claude-opus-5 / 비용 절감(대량): claude-sonnet-5
 RESEARCH_MODEL = "claude-sonnet-5"   # 웹 검색으로 기업 정보 수집 (검색은 sonnet으로 충분)
@@ -92,12 +102,17 @@ def set_account(blog_id: str) -> None:
     WRITE_URL = f"https://blog.naver.com/{blog_id}?Redirect=Write&"
 
 
+#: 더 이상 쓰지 않는 계정. 로그인 폴더는 남겨두고 앱·일괄 발행 목록에서만 뺍니다.
+RETIRED_ACCOUNTS = {"gocks8322"}
+
+
 def list_accounts() -> list[str]:
-    """로그인 정보가 저장돼 있는 계정 목록 (browser_profile/ 하위 폴더)."""
+    """로그인 정보가 저장돼 있는 계정 목록 (browser_profile/ 하위 폴더). 쓰지 않는 계정은 뺍니다."""
     if not PROFILES_ROOT.exists():
         return [BLOG_ID]
-    names = sorted(p.name for p in PROFILES_ROOT.iterdir() if p.is_dir())
-    if BLOG_ID not in names:
+    names = sorted(p.name for p in PROFILES_ROOT.iterdir()
+                   if p.is_dir() and p.name not in RETIRED_ACCOUNTS)
+    if BLOG_ID not in names and BLOG_ID not in RETIRED_ACCOUNTS:
         names.insert(0, BLOG_ID)
     return names
 
@@ -117,7 +132,7 @@ TOMPSONAI_FEATURES = {
     "mock":     ("기업별 NCS 실전 모의고사", ["NCS_봉투모의고사"]),
     "theory":   ("유형별 NCS 이론 학습", ["유형별NCS이론", "의사소통1"]),
     "aiquiz":   ("AI 추천 유형별 문제 풀이", ["유형별NCS문제풀이1", "유형별NCS문제풀이2"]),
-    "clinic":   ("자기소개서 클리닉", ["자기소개서 클리닉", "자기소개서 예시"]),
+    # 자기소개서 클리닉은 2026-09-15부터 소개하지 않습니다.
 }
 
 # (구) 4개를 항상 넣던 시절의 목록. 주제별 선택으로 바뀌어 더 이상 쓰지 않습니다.
@@ -172,6 +187,7 @@ SETTINGS_OVERRIDE_PATH = BASE_DIR / "settings_override.json"
 # GUI 설정 탭에 노출되는 키 목록 (이 안에 있는 키만 오버라이드 허용 — 안전장치)
 SETTINGS_EDITABLE_KEYS = [
     "GEN_MODEL", "CATEGORY", "OPEN_TYPE", "SCHEDULE_FROM", "SCHEDULE_TO",
+    "INSTA_POST_TIMES",      # 인스타 발행 대기열 탭에서 바꿉니다
 ]
 if SETTINGS_OVERRIDE_PATH.exists():
     try:

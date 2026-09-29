@@ -239,14 +239,14 @@ def validate(post, topic: str = topics.ALL_KEY,
         "mock":     (("모의고사",), "'NCS 실전 모의고사' 소개"),
         "theory":   (("이론",), "'유형별 NCS 이론 학습' 소개"),
         "aiquiz":   (("AI",), "'AI 추천 문제 풀이' 소개"),
-        "clinic":   (("자소서", "자기소개서"), "'자기소개서 클리닉' 소개"),
     }
     for key in cta_keys:
         words, what = _WORDS[key]
         if not any(w in body for w in words):
             issues.append(f"V17 마무리에 {what}이 없습니다")
-    if "clinic" in cta_keys and "무료" not in body:
-        issues.append("V17 자기소개서 클리닉이 '무료'라는 점을 밝히지 않았습니다")
+    # V25 자기소개서 클리닉은 소개하지 않습니다 (2026-09-15부터)
+    if "클리닉" in body:
+        issues.append("V25 자기소개서 클리닉은 소개하지 않습니다. 관련 문장과 이미지를 빼세요.")
 
     # V13 일정·인원 환각 (공고 미첨부 시 main.py 가 검사하도록 플래그만 노출)
     # → validate_no_posting() 에서 별도 처리

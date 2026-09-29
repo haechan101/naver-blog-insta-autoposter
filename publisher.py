@@ -821,47 +821,76 @@ def _set_category(frame: FrameLocator, page: Page, name: str) -> bool:
 
 # 달력 조작을 브라우저 안에서 한 번에 끝내는 스크립트.
 # Playwright 로 한 단계씩 만지면 중간에 달력이 닫혀버려서(실측 확인) 통째로 넘깁니다.
+#
+# ⚠ 날짜 칸은 표준 jQuery UI 처럼 <a> 가 아니라 **<button class="ui-state-default">** 입니다.
+#   예전 코드는 <a> 만 찾아서 고를 날짜가 0개로 나왔고, 그걸 '미래 날짜는 막혀 있다'로
+#   잘못 결론냈습니다(2026-08-24). 실제로는 오늘 이후 날짜를 모두 고를 수 있습니다
+#   (2026-09-15 확인). 지난 날짜는 <td class="ui-state-disabled"> 로 표시됩니다.
 _PICK_DATE_JS = """
-([year, month, day]) => {
-  // 달력이 여러 개 있습니다(숨겨진 것 포함). 화면에 보이는 것만 골라야 합니다 —
-  // 숨겨진 쪽은 모든 날짜가 비활성이라 '고를 수 없다'는 엉뚱한 결과가 나옵니다.
-  const all = Array.from(document.querySelectorAll('.ui-datepicker'));
-  const dp = all.find(el => el.offsetParent !== null
-                            && getComputedStyle(el).display !== 'none')
-             || all[0];
-  if (!dp) return 'no-datepicker';
-  for (let i = 0; i < 15; i++) {
+async ([year, month, day]) => {
+  // 예약은 최대 한 달 뒤까지만 씁니다. 그래서 달 넘기기는 한 번까지만 합니다.
+  // 다음 달 버튼을 누른 뒤 달력이 바로 안 바뀌어서, 바뀔 때까지 기다립니다.
+  // 그래도 안 바뀌면 마우스 이벤트를 직접 보냅니다(2026-09-15 확인).
+  const DAY = 'td:not(.ui-state-disabled) button, td:not(.ui-state-disabled) a';
+  const sleep = ms => new Promise(r => setTimeout(r, ms));
+  const pick = () => {
+    const all = Array.from(document.querySelectorAll('.ui-datepicker'));
+    const days = el => el.querySelectorAll(DAY);
+    return all.find(el => el.offsetParent !== null
+                          && getComputedStyle(el).display !== 'none'
+                          && days(el).length > 0)
+        || all.find(el => days(el).length > 0) || all[0];
+  };
+  const ym = dp => {
     const y = parseInt((dp.querySelector('.ui-datepicker-year') || {}).textContent, 10);
     const m = parseInt(((dp.querySelector('.ui-datepicker-month') || {}).textContent || '')
                        .replace('월', ''), 10);
+    return [y, m];
+  };
+  const waitMove = async before => {
+    for (let w = 0; w < 20; w++) {
+      await sleep(100);
+      const dp = pick();
+      if (!dp) continue;
+      const [y, m] = ym(dp);
+      if (y * 12 + m !== before) return true;
+    }
+    return false;
+  };
+  for (let step = 0; step <= 1; step++) {
+    const dp = pick();
+    if (!dp) return 'no-datepicker';
+    const [y, m] = ym(dp);
     if (!y || !m) return 'no-title';
     if (y === year && m === month) {
-      const cells = dp.querySelectorAll('td:not(.ui-state-disabled) a');
-      for (const a of cells) {
-        if (a.textContent.trim() === String(day)) { a.click(); return 'ok'; }
+      for (const b of dp.querySelectorAll(DAY)) {
+        if (b.textContent.trim() === String(day)) { b.click(); return 'ok'; }
       }
       return 'day-not-selectable';
     }
     if (y > year || (y === year && m > month)) return 'past';
+    if (step === 1) return 'over-one-month';
     const next = dp.querySelector('.ui-datepicker-next');
     if (!next || next.classList.contains('ui-state-disabled')) return 'cannot-advance';
+    const before = y * 12 + m;
     next.click();
+    if (await waitMove(before)) continue;
+    for (const type of ['mousedown', 'mouseup', 'click']) {
+      next.dispatchEvent(new MouseEvent(type, {bubbles: true, cancelable: true, view: window}));
+    }
+    if (!(await waitMove(before))) return 'next-no-effect';
   }
-  return 'too-far';
+  return 'over-one-month';
 }
 """
 
 
 def _pick_date(frame: FrameLocator, page: Page, when) -> bool:
-    """예약 날짜를 고릅니다.
+    """예약 날짜를 고릅니다. 오늘 이후 날짜면 다음 달 이후도 됩니다.
 
-    ⚠ 오늘이 아닌 날짜는 현재 넣지 못합니다 (2026-08-24 실측).
-      날짜 입력칸은 readonly 라 값을 쓸 수 없고, 클릭하면 뜨는 jQuery UI 달력은
-      모든 날짜가 비활성(ui-state-disabled, 링크 없음) 상태로 나옵니다.
-      네이티브 setter 로 값을 넣어도 곧바로 되돌아갑니다.
-      → 그래서 '오늘'이면 달력을 아예 건드리지 않고 통과시키고,
-        다른 날짜면 아래 시도를 해본 뒤 실패하면 정직하게 False 를 돌려줍니다.
-        (예약이 어긋나 엉뚱한 시각에 발행되는 것보다 중단이 낫습니다)
+    날짜 입력칸은 readonly 라 값을 직접 쓸 수 없습니다. 칸을 눌러 달력을 연 뒤
+    날짜 버튼을 눌러야 합니다. 고른 뒤에는 입력칸 값을 다시 읽어 확인하고,
+    어긋나면 False 를 돌려줍니다. 엉뚱한 날짜로 예약되느니 멈추는 편이 낫습니다.
     """
     import datetime as _dt
 
@@ -1043,7 +1072,8 @@ def fill_editor(draft_path: str | Path | None, interactive: bool = True,
     사람이 "닫기" 버튼을 눌러야 브라우저를 닫도록 하려는 목적입니다."""
     if not config.USER_DATA_DIR.exists():
         print("❌ 로그인 정보가 없습니다. 먼저 2_로그인저장.bat 을 1회 실행하세요.")
-        sys.exit(1)
+        # sys.exit 는 앱의 작업 스레드에서 오류로 잡히지 않고 스레드만 조용히 끝냅니다
+        raise RuntimeError(f"'{config.BLOG_ID}' 계정의 로그인 정보가 없습니다")
 
     title = body = tags = ""
     if not (probe or probe_pub):
@@ -1073,7 +1103,8 @@ def fill_editor(draft_path: str | Path | None, interactive: bool = True,
             if interactive:
                 input("Enter로 종료 ▶ ")
             context.close()
-            return
+            # 그냥 return 하면 일괄 발행이 '발행 완료'로 기록합니다. 실패는 예외로 알립니다.
+            raise RuntimeError(f"'{config.BLOG_ID}' 계정이 네이버에서 로그아웃된 상태입니다")
 
         page.goto(config.WRITE_URL)
         page.wait_for_timeout(4000)
@@ -1086,7 +1117,13 @@ def fill_editor(draft_path: str | Path | None, interactive: bool = True,
             if interactive:
                 input("확인 후 Enter로 종료 ▶ ")
             context.close()
-            return
+            # ⚠ 예전에는 여기서 그냥 return 했습니다. 그러면 호출한 쪽(run_batch)이
+            #   성공으로 보고 대기열에 '발행됨'으로 남겨, **쓰지도 못한 글이 완료로
+            #   기록되고 다시 시도되지 않았습니다**(2026-09-11 실측).
+            #   실패는 반드시 예외로 알려야 합니다.
+            raise RuntimeError(
+                f"글쓰기 에디터가 열리지 않았습니다 (blog: {config.BLOG_ID}). "
+                "로그인이 끊겼거나 해당 계정이 이 블로그의 소유자가 아닙니다.")
 
         frame = page.frame_locator("#mainFrame")
         _dismiss_popups(frame, page)
@@ -1172,6 +1209,11 @@ def fill_editor(draft_path: str | Path | None, interactive: bool = True,
                 context.close()
                 return
             print("  ❌ 예약 발행 실패. 글은 그대로 있으니 창에서 직접 발행해 주세요.")
+            if not interactive and wait_event is None:
+                # 사람이 창을 볼 수 없는 무인 실행에서는 여기서 멈춰야 합니다.
+                # 그냥 흘려보내면 호출한 쪽이 성공으로 보고 '예약됨'으로 기록합니다.
+                context.close()
+                raise RuntimeError("예약 발행을 설정하지 못했습니다")
 
         print("\n" + "=" * 60)
         print("✅ 입력 완료. 창에서 확인 후 [발행] 버튼을 직접 눌러주세요.")
